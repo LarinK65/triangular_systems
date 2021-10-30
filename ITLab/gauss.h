@@ -11,7 +11,7 @@ M calc_U(const U_M& a, const M& b, size_t a_size, size_t b_columns)
 
 	for (int64_t i = a_size - 1; i + 1 > 0; i--)
 	{
-#pragma omp parallel for
+	#pragma omp parallel for
 		for (int64_t j = 0; j < b_columns; j++)
 		{
 			for (size_t k = i + 1; k < a_size; k++)
@@ -20,7 +20,7 @@ M calc_U(const U_M& a, const M& b, size_t a_size, size_t b_columns)
 			}
 
 			ans[i][j] = b[i][j] - ans[i][j];
-			
+
 			ans[i][j] /= a[i][i];
 		}
 	}
@@ -31,10 +31,10 @@ M calc_U(const U_M& a, const M& b, size_t a_size, size_t b_columns)
 
 
 
-template <typename L_M, typename M>
-M calc_L(const L_M& a, const M& b,  size_t a_size, size_t b_columns)
+template <typename L_M, typename M, typename R_T>
+R_T calc_L(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	M ans(a_size, b_columns);
+	R_T ans(a_size, b_columns);
 
 	for (int64_t i = 0; i < a_size; i++)
 	{
@@ -57,46 +57,65 @@ M calc_L(const L_M& a, const M& b,  size_t a_size, size_t b_columns)
 }
 
 
-template <typename L_M, typename M>
-M solve_lower_system_blocks(const L_M& a, const M& b,  size_t a_size, size_t b_columns)
+
+template <typename L_M, typename M, typename R_T>
+R_T solve_lower_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	M ans(a_size, b_columns);
+	R_T ans(a_size, b_columns);
 
-	using value_type = std::decay_t<decltype(b[0][0])>;
+	using value_type = std::decay_t<decltype(a[0][0])>;
 
-	constexpr size_t block_size = 2048 / sizeof(value_type);
+	constexpr size_t block_size = 1024 / sizeof(value_type);
 
-	for (size_t i = 0; i < a_size; i++)
+	for (size_t first_block = 0; first_block < a_size; first_block += block_size)
 	{
-		for (int64_t start_block = 0; start_block < i; start_block += block_size)
+	#pragma omp parallel for
+		for (int64_t second_block = 0; second_block < b_columns; second_block += block_size)
 		{
-		#pragma omp parallel for
-			for (int64_t j = 0; j < b_columns; j++)
+			for (size_t i = first_block; i < a_size && i < first_block + block_size; i++)
 			{
-				value_type sum = 0;
-				for (int64_t k = start_block; k < i && k < start_block + block_size; k++)
+				size_t e = std::min(b_columns, second_block + block_size);
+				//#pragma omp parallel for
+				for (int64_t j = second_block; j < e; j++)
 				{
-					sum += a[i][k] * ans[k][j];
-				}
+					for (size_t k = first_block; k < i; k++)
+					{
+						ans[i][j] += a[i][k] * ans[k][j];
+					}
 
-				ans[i][j] += sum;
+					ans[i][j] = b[i][j] - ans[i][j];
+					ans[i][j] /= a[i][i];
+				}
 			}
 		}
 
-
-		#pragma omp parallel for
-		for (int64_t j = 0; j < b_columns; j++)
+		for (size_t nfirst_block = first_block + block_size; nfirst_block < a_size; nfirst_block += block_size)
 		{
-			ans[i][j] = b[i][j] - ans[i][j];
-			ans[i][j] /= a[i][i];
+		#pragma omp parallel for
+			for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+			{
+				for (size_t i = nfirst_block; i < a_size && i < nfirst_block + block_size; i++)
+				{
+					size_t e = std::min(b_columns, second_block + block_size);
+
+					for (size_t j = second_block; j < e; j++)
+					{
+						for (size_t k = first_block; k < first_block + block_size; k++)
+						{
+							ans[i][j] += a[i][k] * ans[k][j];
+						}
+					}
+				}
+			}
 		}
 	}
 
 	return ans;
 }
 
+
 template <typename U_M, typename M>
-M solve_upper_system_blocks(const U_M& a, const M& b,  size_t a_size, size_t b_columns)
+M solve_upper_system_blocks(const U_M& a, const M& b, size_t a_size, size_t b_columns)
 {
 	M ans(a_size, b_columns);
 
@@ -132,3 +151,4 @@ M solve_upper_system_blocks(const U_M& a, const M& b,  size_t a_size, size_t b_c
 
 	return ans;
 }
+

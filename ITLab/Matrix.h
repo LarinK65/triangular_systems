@@ -197,6 +197,20 @@ struct matrix
 	matrix& operator=(const matrix&) = default;
 	matrix& operator=(matrix&&) = default;
 
+
+	matrix(const matrix_columns<T>& m)
+		: h(m.h)
+		, w(m.w)
+		, data(m.h * m.w)
+	{
+		for (size_t i = 0; i < this->h; i++)
+		{
+			for (size_t j = 0; j < this->w; j++)
+			{
+				(*this)[i][j] = m[i][j];
+			}
+		}
+	}
 	matrix(size_t rows, size_t columns)
 		: h(rows)
 		, w(columns)
@@ -252,9 +266,9 @@ template <typename T>
 struct row_reference
 {
 	row_reference(const std::vector<T>& matrix_data, size_t i, size_t h)
-		: data(matrix_data)
-		, row(i)
+		: row(i)
 		, h(h)
+		, data(matrix_data)
 	{}
 
 	const T& operator[](size_t j) const noexcept
@@ -295,6 +309,5 @@ struct matrix_columns : matrix<T>
 	{
 		return const_cast<matrix_columns&>(*this)[i];
 	}
-
 };
 
