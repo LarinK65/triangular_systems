@@ -23,10 +23,10 @@
     <ClInclude Include="gauss.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
-    <ClInclude Include="triangle_matrix.h">
+    <ClInclude Include="Matrix.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
-    <ClInclude Include="Matrix.h">
+    <ClInclude Include="tester_funcs.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
   </ItemGroup>

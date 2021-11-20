@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
 
+#ifdef HASCPP17
+
 template <typename T, bool IsUpper>
 struct triangle_matrix
 {
@@ -59,7 +61,7 @@ public:
 		return const_cast<triangle_matrix&>(*this)[row];
 	}
 
-protected:
+//protected:
 	std::vector<T> data;
 	size_t _size;
 };
@@ -182,7 +184,7 @@ public:
 	friend struct triangle_matrix_value_reference<T, IsUpper>;
 };
 
-
+#endif
 
 template <typename T>
 struct matrix_columns;
@@ -197,20 +199,6 @@ struct matrix
 	matrix& operator=(const matrix&) = default;
 	matrix& operator=(matrix&&) = default;
 
-
-	matrix(const matrix_columns<T>& m)
-		: h(m.h)
-		, w(m.w)
-		, data(m.h * m.w)
-	{
-		for (size_t i = 0; i < this->h; i++)
-		{
-			for (size_t j = 0; j < this->w; j++)
-			{
-				(*this)[i][j] = m[i][j];
-			}
-		}
-	}
 	matrix(size_t rows, size_t columns)
 		: h(rows)
 		, w(columns)
@@ -301,9 +289,24 @@ struct matrix_columns : matrix<T>
 		}
 	}
 
+	operator matrix<T>()
+	{
+		matrix<T> r(this->h, this->w);
+
+		for (size_t i = 0; i < this->h; i++)
+		{
+			for (size_t j = 0; j < this->w; j++)
+			{
+				r[i][j] = (*this)[i][j];
+			}
+		}
+
+		return r;
+	}
+
 	row_reference<T> operator[](size_t i) noexcept
 	{
-		return row_reference(this->data, i, this->h);
+		return row_reference<T>(this->data, i, this->h);
 	}
 	const row_reference<T> operator[](size_t i) const noexcept
 	{

@@ -4,252 +4,164 @@
 #include <initializer_list>
 #include <random>
 #include <chrono>
+#include <fstream>
+#include <string>
 #include "gauss.h"
 #include "Matrix.h"
+#include "tester_funcs.h"
+
+#include <mkl.h>
+
 
 using namespace std;
 
-#define TEST_BASIC
-//#define CALCULATE_ERROR
-#define TEST_LOWER
-//#define TEST_UPPER
-//#define PRINT_MATRIX
+using type = double;
 
-uniform_real_distribution<float> distr(-1'000, 1'000);
-uniform_int_distribution<int> mid_distr(10'000, 100'000);
-
-void test(int n, int m, mt19937& my_rand)
+void create_test(size_t n, size_t m, std::mt19937& my_rand, const std::string& file_descr, int mt, int64_t base_seed)
 {
+	matrix<double> a = (mt == 0 ? 
+		generate_matrix<matrix<type>>(matrix_types::lower, n, n, my_rand) 
+		: generate_matrix<matrix<type>>(matrix_types::upper, n, n, my_rand));
 
+	matrix_columns<double> b = generate_matrix<matrix_columns<type>>(matrix_types::full, n, m, my_rand);
 
-#ifdef TEST_LOWER
-	triangle_matrix<double, false> a_lower(n);
-
-	for (int64_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < i; j++)
-		{
-			a_lower[i][j] = distr(my_rand);
-		}
-		a_lower[i][i] = mid_distr(my_rand);
-		if (mid_distr(my_rand) % 2) {
-			a_lower[i][i] = -a_lower[i][i];
-		}
-	}
-#endif	
-#ifdef TEST_UPPER
-	triangle_matrix<double, true> a_upper(n);
-
-	for (int64_t i = 0; i < n; i++)
-	{
-		for (size_t j = i + 1; j < n; j++)
-		{
-			a_upper[i][j] = distr(my_rand);
-		}
-		a_upper[i][i] = mid_distr(my_rand);
-		if (mid_distr(my_rand) % 2) {
-			a_upper[i][i] = -a_upper[i][i];
-		}
-	}
-#endif
-
-
-	matrix_columns<double> b(n, m);
-
-	for (int64_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			b[i][j] = distr(my_rand);
-		}
-	}
+	ofstream to_in(string("input") + file_descr, ios::out | ios::binary);
+	to_in.write(reinterpret_cast<char*>(&base_seed), sizeof(base_seed));
+	write_matrix_to_binary_file(to_in, a);
+	write_matrix_to_binary_file(to_in, b);
+	to_in.close();
 
 	auto begin = chrono::high_resolution_clock::now();
+
+	auto ans = (mt == 0 ?
+		solve_lower_system_mkl<decltype(a), decltype(b), matrix_columns<double>>(a, b, n, m)
+		: solve_upper_system_mkl<decltype(a), decltype(b), matrix_columns<double>>(a, b, n, m));
+
 	auto end = chrono::high_resolution_clock::now();
 	auto elapsed_secs = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
 
-#ifdef TEST_LOWER
-	begin = chrono::high_resolution_clock::now();
+	to_in.open(string("answer") + file_descr, ios::out | ios::binary);
+	write_matrix_to_binary_file(to_in, ans);
+	to_in.close();
 
-	auto res_lower_block = solve_lower_system_blocks<decltype(a_lower), decltype(b), matrix<double>>(a_lower, b, n, m);
 
-	end = chrono::high_resolution_clock::now();
-	elapsed_secs = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
-	std::cout << "block algorithm for lower system time: " << elapsed_secs << "ms" << std::endl;
-
-#endif
-#ifdef TEST_UPPER
-
-	begin = chrono::high_resolution_clock::now();
-
-	auto res_upper_block = solve_upper_system_blocks(a_upper, b, n, m);
-
-	end = chrono::high_resolution_clock::now();
-	elapsed_secs = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
-	std::cout << "block algorithm for upper system time: " << elapsed_secs << "ms" << std::endl;
-#endif
-
-#ifdef TEST_BASIC
-#ifdef TEST_LOWER
-	begin = chrono::high_resolution_clock::now();
-
-	auto res_lower_basic = calc_L<decltype(a_lower), decltype(b), matrix<double>>(a_lower, b, n, m);
-
-	end = chrono::high_resolution_clock::now();
-	elapsed_secs = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
-	std::cout << "basic algorithm for lower system time: " << elapsed_secs << "ms" << std::endl;
-#endif
-#ifdef TEST_UPPER
-	begin = chrono::high_resolution_clock::now();
-
-	auto res_upper_basic = calc_U(a_upper, b, n, m);
-
-	end = chrono::high_resolution_clock::now();
-	elapsed_secs = std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
-	std::cout << "basic algorithm for upper system time: " << elapsed_secs << "ms" << std::endl;
-
-#endif
-#endif
-
-	cout << '\n';
-
-#ifdef CALCULATE_ERROR
-#ifdef TEST_BASIC
-#ifdef TEST_LOWER
-	double max_error_lower_basic = 0;
-	for (size_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			double s = 0;
-			for (size_t k = 0; k <= i; k++)
-			{
-				s += a_lower[i][k] * res_lower_basic[k][j];
-			}
-
-			if (abs(b[i][j]) > 1e-8) {
-				max_error_lower_basic = max(max_error_lower_basic, abs(s - b[i][j]) / abs(b[i][j]));
-			}
-		}
-	}
-
-	cout << "basic algorithm for lower system error : " << max_error_lower_basic << endl;
-#endif
-#ifdef TEST_UPPER
-	double max_error_upper_basic = 0;
-	for (size_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			double s = 0;
-			for (size_t k = i; k < n; k++)
-			{
-				s += a_upper[i][k] * res_upper_basic[k][j];
-			}
-
-			if (abs(b[i][j]) > 1e-8) {
-				max_error_upper_basic = max(max_error_upper_basic, abs(s - b[i][j]) / abs(b[i][j]));
-			}
-		}
-	}
-
-	cout << "basic algorithm for upper system error : " << max_error_upper_basic << endl;
-#endif
-#endif
-#endif
-
-#ifdef CALCULATE_ERROR
-#ifdef TEST_LOWER
-	double max_error_lower_block = 0;
+	double max_error = 0;
 	for (int64_t i = 0; i < n; i++)
 	{
 		for (size_t j = 0; j < m; j++)
 		{
 			double s = 0;
-			for (size_t k = 0; k <= i; k++)
+			for (size_t k = 0; k < n; k++)
 			{
-				s += a_lower[i][k] * res_lower_block[k][j];
+				s += a[i][k] * ans[k][j];
 			}
 
-			if (abs(b[i][j]) > 1e-8) {
-				max_error_lower_block = max(max_error_lower_block, abs(s - b[i][j]) / abs(b[i][j]));
-			}
+			max_error = max(max_error, abs(s - b[i][j]));
 		}
 	}
 
-	cout << "block algorithm for lower system error: : " << max_error_lower_block << endl;
-#endif
-#ifdef TEST_UPPER
-	double max_error_upper_block = 0;
-	for (int64_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			double s = 0;
-			for (size_t k = i; k < n; k++)
-			{
-				s += a_upper[i][k] * res_upper_block[k][j];
-			}
+	if (max_error > std::numeric_limits<type>::epsilon() * 1e+10) {
+		ofstream fout(string("bad_tests.log") + file_descr, ios::out | ios::app);
 
-			if (abs(b[i][j]) > 1e-8) {
-				max_error_upper_block = max(max_error_upper_block, abs(s - b[i][j]) / abs(b[i][j]));
-			}
-		}
+		if (mt == 0)
+			fout << "hight error of mkl in test: lower system n = " << n << " m = " << m << " seed = " << base_seed << " err = " << max_error << endl;
+		else 
+			fout << "hight error of mkl in test: upper system n = " << n << " m = " << m << " seed = " << base_seed << " err = " << max_error << endl;
+
+		fout.close();
 	}
 
-	cout << "block algorithm for upper system error: : " << max_error_upper_block << endl;
-#endif
-#endif
+	ofstream time_report(string("mkl_times") + file_descr, ios::app);
+	time_report << elapsed_secs << ' ';
+	time_report.close();
 }
 
-int main()
+void test(size_t n, size_t m, int test_type, const std::string& file_descr)
+{
+	ifstream fin(string("input") + file_descr, ios::in | ios::binary);
+	
+	int64_t base_seed;
+	fin.read(reinterpret_cast<char*>(&base_seed), sizeof(base_seed));
+
+	matrix<type> a(n, n);
+	matrix_columns<type> b(n, m);
+
+	read_matrix_from_binary_file(fin, a);
+	read_matrix_from_binary_file(fin, b);
+
+	fin.close();
+
+	fin.open(string("answer") + file_descr, ios::in | ios::binary);
+
+	matrix<double> ans(n, m);
+	read_matrix_from_binary_file(fin, ans);
+
+	fin.close();
+
+	auto tested_func = solve_lower_system_blocks<matrix<double>, matrix_columns<double>, matrix_columns<double>>;
+
+	switch (test_type)
+	{
+	case 0:
+		tested_func = solve_lower_system_blocks<matrix<double>, matrix_columns<double>, matrix_columns<double>>;
+		break;
+	case 1:
+		tested_func = solve_lower_system_blocks_mkl_mul<matrix<double>, matrix_columns<double>, matrix_columns<double>>;
+		break;
+	case 2:
+		tested_func = solve_upper_system_blocks<matrix<double>, matrix_columns<double>, matrix_columns<double>>;
+		break;
+	case 3:
+		tested_func = solve_upper_system_blocks_mkl_mul<matrix<double>, matrix_columns<double>, matrix_columns<double>>;
+		break;
+	}
+
+	auto res = tester(tested_func, a, b, n, m, ans);
+
+	if (res.second > std::numeric_limits<type>::epsilon() * 1e+10) {
+		ofstream fout(string("bad_tests.log") + file_descr, ios::out | ios::app);
+
+		fout << "hight error in test: type = " << test_type << " n = " << n << " m = " << m << " seed = " << base_seed << " err = " << res.second << endl;
+
+		fout.close();
+	}
+
+	ofstream rep(string("time_report") + file_descr, ios::app);
+	rep << res.first << ' ';
+	rep.close();
+}
+
+//#define CHECK
+
+int main(int argc, char* argv[])
 {
 
-	size_t seed = random_device{}();
-	//seed = 3349713019;
+#ifndef CHECK
+	size_t n = atoi(argv[1]);
+	size_t thread_nums = atoi(argv[2]);
+	int test_type = atoi(argv[3]); // -1 - create   0 - without mkl    1 - witch mkl
+	int sys_type = atoi(argv[4]); // 0 - lower   1 - upper
+	string descr = argv[5];
 
-	cout << seed << endl << endl;
-
-	mt19937 my_rand(seed);
-	
-	test(3000, 2000, my_rand);
-
-
-
-
-	
-#ifdef PRINT_MATRIX
-
-	for (size_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j <= i; j++)
-		{
-			cout << a_lower[i][j] << ' ';
-		}
-		cout << '\n';
-	}
-	cout << '\n';
-	
-	for (size_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			cout << b[i][j] << ' ';
-		}
-		cout << '\n';
-	}
-	cout << '\n';
-
-	for (size_t i = 0; i < n; i++)
-	{
-		for (size_t j = 0; j < m; j++)
-		{
-			cout << res_lower_block[i][j] << ' ';
-		}
-		cout << '\n';
-	}
-	cout << '\n';
+#else
+	size_t n = 5000;
+	size_t thread_nums = 1;
+	int test_type = 0; // -1 - create   0 - without mkl    1 - witch mkl
+	int sys_type = 0; // 0 - lower   1 - upper
+	string descr = "_test";
 #endif
-	
+
+	omp_set_num_threads(thread_nums);
+
+	if (test_type == -1) {
+		size_t seed = random_device{}();
+		mt19937 my_rand(seed);
+
+		create_test(n, n, my_rand, descr, sys_type, seed);
+	}
+	else {
+		test(n, n, sys_type * 2 + test_type, descr);
+	}
+
 	return 0;
 }
