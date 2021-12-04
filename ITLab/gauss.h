@@ -4,9 +4,20 @@
 #include <utility>
 #include <type_traits>
 #include <mkl.h>
+#include <algorithm>
+#include "Matrix.h"
 
+#ifdef FIRST_BLOCK_SIZE
+constexpr size_t FIRST_GLOBAL_BLOCK_SIZE_BYTE = FIRST_BLOCK_SIZE;
+#else
+constexpr size_t FIRST_GLOBAL_BLOCK_SIZE_BYTE = 512;
+#endif
 
-constexpr size_t GLOBAL_BLOCK_SIZE_BYTE = 512;
+#ifdef SECOND_BLOCK_SIZE
+constexpr size_t SECOND_GLOBAL_BLOCK_SIZE_BYTE = SECOND_BLOCK_SIZE;
+#else
+constexpr size_t SECOND_GLOBAL_BLOCK_SIZE_BYTE = 512;
+#endif
 
 template <typename L_M, typename M, typename R_T>
 R_T solve_lower_system_basic(const L_M& a, const M& b, size_t a_size, size_t b_columns)
@@ -35,24 +46,36 @@ R_T solve_lower_system_basic(const L_M& a, const M& b, size_t a_size, size_t b_c
 }
 
 
-template <typename L_M, typename M, typename R_T>
-R_T solve_lower_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_columns)
+template <typename T>
+matrix_columns<T> solve_lower_system_blocks(const matrix<T>& a, const matrix_columns<T>& b, size_t n, size_t m)
 {
-	R_T ans(a_size, b_columns);
+	using value_type = T;
+	constexpr size_t first_block_size = FIRST_GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+	constexpr size_t second_block_size = SECOND_GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
 
-	using value_type = typename std::decay<decltype(a[0][0])>::type;
+	matrix_columns<T> ans(n, m, noinit);
 
-	constexpr size_t block_size = GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
-
-	for (size_t first_block = 0; first_block < a_size; first_block += block_size)
+	for (size_t i = 0; i < n; i++)
 	{
-	#pragma omp parallel for
-		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+	#pragma omp parallel for schedule(static)
+		for (size_t second_block = 0; second_block < m; second_block += second_block_size)
 		{
-			for (size_t i = first_block; i < a_size && i < first_block + block_size; i++)
+			for (size_t j = second_block; j < m && j < second_block + second_block_size; j++)
 			{
-				size_t e = std::min(b_columns, second_block + block_size);
-				for (int64_t j = second_block; j < e; j++)
+				ans[i][j] = 0;
+			}
+		}
+	}
+
+	for (size_t first_block = 0; first_block < n; first_block += first_block_size)
+	{
+	#pragma omp parallel for schedule(static)
+		for (size_t second_block = 0; second_block < m; second_block += second_block_size)
+		{
+			size_t er = std::min<size_t>(second_block + second_block_size, m);
+			for (size_t i = first_block; i < n && i < first_block + first_block_size; i++)
+			{
+				for (int64_t j = second_block; j < er; j++)
 				{
 					auto sum = ans[i][j];
 				#pragma omp simd reduction(+: sum)
@@ -63,24 +86,21 @@ R_T solve_lower_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_
 
 					ans[i][j] = b[i][j] - sum;
 					ans[i][j] /= a[i][i];
+
 				}
 			}
-		}
 
-	#pragma omp parallel for collapse(2)
-		for (size_t nfirst_block = first_block + block_size; nfirst_block < a_size; nfirst_block += block_size)
-		{
-			for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+
+			for (size_t nfirst_block = first_block + first_block_size; nfirst_block < n; nfirst_block += first_block_size)
 			{
-				size_t e = std::min(b_columns, second_block + block_size);
-				for (size_t i = nfirst_block; i < a_size && i < nfirst_block + block_size; i++)
+				size_t el = std::min<size_t>(nfirst_block + first_block_size, n);
+				for (size_t i = nfirst_block; i < el; i++)
 				{
-
-					for (size_t j = second_block; j < e; j++)
+					for (size_t j = second_block; j < er; j++)
 					{
 						auto sum = ans[i][j];
 					#pragma omp simd reduction(+: sum)
-						for (size_t k = first_block; k < first_block + block_size; k++)
+						for (size_t k = first_block; k < first_block + first_block_size; k++)
 						{
 							sum += a[i][k] * ans[k][j];
 						}
@@ -100,15 +120,28 @@ R_T solve_lower_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_
 template <typename L_M, typename M, typename R_T>
 R_T solve_lower_system_blocks_mkl_mul(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	R_T ans(a_size, b_columns);
 
 	using value_type = typename std::decay<decltype(a[0][0])>::type;
 
-	constexpr size_t block_size = GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+	constexpr size_t block_size = FIRST_GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+
+	R_T ans(a_size, b_columns);
+
+	for (size_t i = 0; i < a_size; i++)
+	{
+	#pragma omp parallel for schedule(static)
+		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+		{
+			for (size_t j = 0; j < second_block && j < b_columns; j++)
+			{
+				ans[i][j] = 0;
+			}
+		}
+	}
 
 	for (size_t first_block = 0; first_block < a_size; first_block += block_size)
 	{
-	#pragma omp parallel for
+	#pragma omp parallel for schedule(static)
 		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
 		{
 			size_t e = std::min(b_columns, second_block + block_size);
@@ -143,16 +176,29 @@ R_T solve_lower_system_blocks_mkl_mul(const L_M& a, const M& b, size_t a_size, s
 template <typename L_M, typename M, typename R_T>
 R_T solve_upper_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	R_T ans(a_size, b_columns);
 
 	using value_type = typename std::decay<decltype(a[0][0])>::type;
 
-	constexpr size_t block_size = GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+	constexpr size_t block_size = FIRST_GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+
+	R_T ans(a_size, b_columns);
+
+	for (size_t i = 0; i < a_size; i++)
+	{
+	#pragma omp parallel for schedule(static)
+		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+		{
+			for (size_t j = 0; j < second_block && j < b_columns; j++)
+			{
+				ans[i][j] = 0;
+			}
+		}
+	}
 
 	for (size_t first_block = a_size - a_size % block_size; first_block + block_size > 0; first_block -= block_size)
 	{
 		size_t block = std::min(a_size - first_block, block_size);
-	#pragma omp parallel for
+	#pragma omp parallel for schedule(static)
 		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
 		{
 			size_t e = std::min(b_columns, second_block + block_size);
@@ -174,7 +220,7 @@ R_T solve_upper_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_
 		}
 
 		size_t e2 = std::min(a_size, first_block + block_size);
-	#pragma omp parallel for collapse(2)
+	#pragma omp parallel for collapse(2) schedule(static)
 		for (size_t nfirst_block = 0; nfirst_block < first_block; nfirst_block += block_size)
 		{
 			for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
@@ -207,16 +253,33 @@ R_T solve_upper_system_blocks(const L_M& a, const M& b, size_t a_size, size_t b_
 template <typename L_M, typename M, typename R_T>
 R_T solve_upper_system_blocks_mkl_mul(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	R_T ans(a_size, b_columns);
 
 	using value_type = typename std::decay<decltype(a[0][0])>::type;
 
-	constexpr size_t block_size = GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+	constexpr size_t block_size = FIRST_GLOBAL_BLOCK_SIZE_BYTE / sizeof(value_type);
+
+	R_T ans(a_size, b_columns);
+
+	for (size_t first_block = 0; first_block < a_size; first_block += block_size)
+	{
+	#pragma omp parallel for schedule(static)
+		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
+		{
+			for (size_t i = first_block; i < a_size && i < first_block + block_size; i++)
+			{
+				size_t e = std::min(b_columns, second_block + block_size);
+				for (int64_t j = second_block; j < e; j++)
+				{
+					ans[i][j] = 0;
+				}
+			}
+		}
+	}
 
 	for (size_t first_block = a_size - a_size % block_size; first_block + block_size > 0; first_block -= block_size)
 	{
 		size_t block = std::min(a_size - first_block, block_size);
-	#pragma omp parallel for
+	#pragma omp parallel for schedule(static)
 		for (size_t second_block = 0; second_block < b_columns; second_block += block_size)
 		{
 			size_t e = std::min(b_columns, second_block + block_size);
@@ -246,10 +309,19 @@ R_T solve_upper_system_blocks_mkl_mul(const L_M& a, const M& b, size_t a_size, s
 }
 
 
-template <typename L_M, typename M, typename R_T>
-R_T solve_lower_system_mkl(const L_M& a, const M& b, size_t a_size, size_t b_columns)
+template <typename T>
+matrix_columns<T> solve_lower_system_mkl(const matrix<T>& a, const matrix_columns<T>& b, size_t a_size, size_t b_columns)
 {
-	R_T ans(b);
+	matrix_columns<T> ans(a_size, b_columns, noinit);
+
+#pragma omp parallel for
+	for (int64_t j = 0; j < b_columns; j++)
+	{
+		for (size_t i = 0; i < a_size; i++)
+		{
+			ans[i][j] = b[i][j];
+		}
+	}
 
 	cblas_dtrsm(CblasColMajor, CblasLeft, CblasUpper, CblasConjTrans, CblasNonUnit, a_size, b_columns, 1, &a[0][0], a_size, &ans[0][0], a_size);
 
@@ -260,7 +332,19 @@ R_T solve_lower_system_mkl(const L_M& a, const M& b, size_t a_size, size_t b_col
 template <typename L_M, typename M, typename R_T>
 R_T solve_upper_system_mkl(const L_M& a, const M& b, size_t a_size, size_t b_columns)
 {
-	R_T ans(b);
+	//static_assert(false);
+
+
+	R_T ans(a_size, b_columns);
+
+	for (size_t i = 0; i < a_size; i++)
+	{
+	#pragma omp parallel for
+		for (int64_t j = 0; j < b_columns; j++)
+		{
+			ans[i][j] = b[i][j];
+		}
+	}
 
 	cblas_dtrsm(CblasColMajor, CblasLeft, CblasLower, CblasConjTrans, CblasNonUnit, a_size, b_columns, 1, &a[0][0], a_size, &ans[0][0], a_size);
 

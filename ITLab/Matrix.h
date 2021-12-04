@@ -1,5 +1,8 @@
 #pragma once
 #include <vector>
+#include <cstring>
+#include <cinttypes>
+#include <cstddef>
 
 #ifdef HASCPP17
 
@@ -61,7 +64,7 @@ public:
 		return const_cast<triangle_matrix&>(*this)[row];
 	}
 
-//protected:
+	//protected:
 	std::vector<T> data;
 	size_t _size;
 };
@@ -72,7 +75,7 @@ class triangle_matrix_full;
 template <typename T, bool IsUpper>
 struct triangle_matrix_value_reference
 {
-	using matrix_type =  triangle_matrix_full<T, IsUpper>;
+	using matrix_type = triangle_matrix_full<T, IsUpper>;
 
 	triangle_matrix_value_reference(matrix_type& m, size_t i, size_t j)
 		: i(i)
@@ -128,7 +131,7 @@ struct triangle_matrix_value_reference
 template <typename T, bool IsUpper>
 struct row_reference_triangle_matrix_full
 {
-	using matrix_type =  triangle_matrix_full<T, IsUpper>;
+	using matrix_type = triangle_matrix_full<T, IsUpper>;
 	using reference = triangle_matrix_value_reference<T, IsUpper>;
 
 	row_reference_triangle_matrix_full(const matrix_type& m, size_t i)
@@ -185,6 +188,9 @@ public:
 };
 
 #endif
+
+
+#ifdef NO_MEMORY_OPTIMIZATION
 
 template <typename T>
 struct matrix_columns;
@@ -313,4 +319,190 @@ struct matrix_columns : matrix<T>
 		return const_cast<matrix_columns&>(*this)[i];
 	}
 };
+
+#else 
+
+struct noinit_t {} noinit;
+
+template <typename T>
+struct matrix
+{
+	matrix() = default;
+	
+	matrix(size_t h, size_t w) noexcept
+		: h(h)
+		, w(w)
+		, data(static_cast<T*>(::operator new(sizeof(T)* h* w)))
+	{
+		std::memset(data, 0, sizeof(T) * h * w);
+	}
+
+	matrix(size_t h, size_t w, noinit_t) noexcept
+		: h(h)
+		, w(w)
+		, data(static_cast<T*>(::operator new(sizeof(T) * h * w)))
+	{}
+
+	~matrix() noexcept
+	{
+		::operator delete(this->data);
+	}
+
+	matrix(const matrix& other) noexcept
+		: h(other.h)
+		, w(other.w)
+		, data(static_cast<T*>(::operator new(sizeof(T)* other.h* other.w)))
+	{
+		std::memcpy(this->data, other.data, sizeof(T) * other.h * other.w);
+	}
+
+	matrix(matrix&& other) noexcept
+		: h(other.h)
+		, w(other.w)
+		, data(other.data)
+	{
+		other.w = other.h = 0;
+		other.data = nullptr;
+	}
+
+	matrix& operator=(const matrix& other) noexcept
+	{
+		this->~matrix();
+		new (this) matrix<T>(other);
+		
+		return *this;
+	}
+
+	matrix& operator=(matrix&& other) noexcept
+	{
+		this->~matrix();
+
+		this->h = other.h;
+		this->w = other.w;
+		this->data = other.data;
+
+		other.w = other.h = 0;
+		other.data = nullptr;
+
+		return *this;
+	}
+
+	__forceinline T* operator[](size_t i) noexcept
+	{
+		return this->data + i * w;
+	}
+	__forceinline const T* operator[](size_t i) const noexcept
+	{
+		return const_cast<matrix&>(*this)[i];
+	}
+
+	size_t h = 0, w = 0;
+	T* data = nullptr;
+};
+
+
+template <typename T>
+struct matrix_ret_ref
+{
+	matrix_ret_ref() = delete;
+
+	matrix_ret_ref(size_t h, T* data) noexcept
+		: h(h)
+		, data(data)
+	{}
+
+	__forceinline T& operator[](size_t j) noexcept
+	{
+		return *(this->data + j * this->h);
+	}
+
+	__forceinline T& operator[](size_t j) const noexcept
+	{
+		return const_cast<matrix_ret_ref&>(*this)[j];
+	}
+
+
+	size_t h;
+	T* data;
+};
+
+template <typename T>
+struct matrix_columns
+{
+	matrix_columns() = default;
+
+	matrix_columns(size_t h, size_t w)
+		: h(h)
+		, w(w)
+		, data(static_cast<T*>(::operator new(sizeof(T)* h* w)))
+	{
+		std::memset(data, 0, sizeof(T) * h * w);
+	}
+
+	matrix_columns(size_t h, size_t w, noinit_t)
+		: h(h)
+		, w(w)
+		, data(static_cast<T*>(::operator new(sizeof(T)* h* w)))
+	{}
+
+	~matrix_columns()
+	{
+		::operator delete(this->data);
+	}
+
+	matrix_columns(const matrix_columns& other)
+		: h(other.h)
+		, w(other.w)
+		, data(static_cast<T*>(::operator new(sizeof(T)* other.h* other.w)))
+	{
+		std::memcpy(this->data, other.data, sizeof(T) * other.h * other.w);
+	}
+
+	matrix_columns(matrix_columns&& other) noexcept
+		: h(other.h)
+		, w(other.w)
+		, data(other.data)
+	{
+		other.w = other.h = 0;
+		other.data = nullptr;
+	}
+
+	matrix_columns& operator=(const matrix_columns& other)
+	{
+		this->~matrix_columns();
+		new (this) matrix_columns<T>(other);
+
+		return *this;
+	}
+
+	matrix_columns& operator=(matrix_columns&& other) noexcept
+	{
+		this->~matrix_columns();
+
+		this->h = other.h;
+		this->w = other.w;
+		this->data = other.data;
+
+		other.w = other.h = 0;
+		other.data = nullptr;
+
+		return *this;
+	}
+
+	__forceinline matrix_ret_ref<T> operator[](size_t i) noexcept
+	{
+		return matrix_ret_ref<T>(h, this->data + i);
+	}
+	__forceinline const matrix_ret_ref<T> operator[](size_t i) const noexcept
+	{
+		return const_cast<matrix_columns&>(*this)[i];
+	}
+
+	size_t h = 0, w = 0;
+	T* data = nullptr;
+};
+
+
+#endif
+
 

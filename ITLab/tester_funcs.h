@@ -64,7 +64,7 @@ MT generate_matrix(matrix_types gen_type, size_t n, size_t m, std::mt19937& my_r
 
 
 template <typename func, typename T>
-std::pair<int64_t, double> tester(func tested_function, const matrix<T>& a, const matrix_columns<T>& b, size_t n, size_t m, const matrix<T>& ans)
+std::pair<int64_t, double> tester(func tested_function, const matrix<T>& a, const matrix_columns<T>& b, size_t n, size_t m, const matrix_columns<T>& ans)
 {
 	auto begin = std::chrono::high_resolution_clock::now();
 	auto res = tested_function(a, b, n, m);
